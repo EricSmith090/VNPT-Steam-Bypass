@@ -49,33 +49,64 @@ function Get-DnsResult {
         [string]$Server
     )
 
-    $params = @{
-        Name         = $Name
-        Type         = 'A'
-        DnsOnly      = $true
-        QuickTimeout = $true
-        ErrorAction  = 'Stop'
+    # Use nslookup rather than Resolve-DnsName: current Windows builds still
+    # consult the hosts file from Resolve-DnsName even with -NoHostsFile, which
+    # would hide the real resolver answer after the bypass pins are installed.
+    if (-not (Get-Command nslookup.exe -ErrorAction SilentlyContinue)) {
+        return [pscustomobject]@{ Status = 'ERROR: nslookup.exe not found'; IPs = @() }
     }
-    if ($Server) { $params['Server'] = $Server }
 
+    $arguments = @('-timeout=3', '-type=A', $Name)
+    if ($Server) { $arguments += $Server }
+
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
-        $records = Resolve-DnsName @params
-        $ips = @($records | Where-Object { $_.Type -eq 'A' } | ForEach-Object { $_.IPAddress })
-        if ($ips.Count -gt 0) {
-            return [pscustomobject]@{ Status = ($ips -join ', '); IPs = $ips }
-        }
-        return [pscustomobject]@{ Status = 'NO_A'; IPs = @() }
+        $output = & nslookup.exe @arguments 2>&1
     }
-    catch {
-        $message = $_.Exception.Message
-        if ($message -match 'does not exist|Non-existent') {
-            return [pscustomobject]@{ Status = 'NXDOMAIN'; IPs = @() }
-        }
-        if ($message -match 'timed out|timeout') {
-            return [pscustomobject]@{ Status = 'TIMEOUT'; IPs = @() }
-        }
-        return [pscustomobject]@{ Status = "ERROR: $message"; IPs = @() }
+    finally {
+        $ErrorActionPreference = $previousPreference
     }
+
+    $text = ($output | Out-String)
+    if ($text -match "can't find|NXDOMAIN|Non-existent domain") {
+        return [pscustomobject]@{ Status = 'NXDOMAIN'; IPs = @() }
+    }
+    if ($text -match 'timed out|timeout') {
+        return [pscustomobject]@{ Status = 'TIMEOUT'; IPs = @() }
+    }
+
+    # The resolver's own address is printed in the Server/Address block before
+    # the first blank line. Everything after that block is the answer.
+    $lines = $text -split "`r?`n"
+    $serverIndex = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*Server:') {
+            $serverIndex = $i
+            break
+        }
+    }
+
+    if ($serverIndex -ge 0) {
+        $j = $serverIndex
+        while ($j -lt $lines.Count -and $lines[$j].Trim() -ne '') { $j++ }
+        $answerSection = if ($j + 1 -lt $lines.Count) {
+            ($lines[($j + 1)..($lines.Count - 1)] -join "`n")
+        }
+        else { '' }
+    }
+    else {
+        $answerSection = $text
+    }
+
+    $ips = @([regex]::Matches($answerSection, '\b([0-9]{1,3}(?:\.[0-9]{1,3}){3})\b') |
+        ForEach-Object { $_.Groups[1].Value } |
+        Select-Object -Unique)
+
+    if ($ips.Count -gt 0) {
+        return [pscustomobject]@{ Status = ($ips -join ', '); IPs = $ips }
+    }
+    return [pscustomobject]@{ Status = 'NO_A'; IPs = @() }
 }
 
 function Test-Tls {
