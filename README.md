@@ -1,3 +1,5 @@
+[Tiếng Việt](https://github.com/EricSmith090/VNPT-Steam-Bypass/blob/main/README.vn.MD)
+
 # VNPT-Steam-Bypass
 
 A targeted workaround for the VNPT Steam block documented in
