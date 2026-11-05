@@ -50,6 +50,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'SteamBypass.Common.ps1')
 
 Write-SteamBypassHeader 'VNPT Steam bypass - enable'
+Write-SteamNetworkContext
 
 if ($SkipHosts -and $SkipNrpt) {
     throw 'Both -SkipHosts and -SkipNrpt were specified; there is nothing to do.'
@@ -81,11 +82,27 @@ Write-Host 'Validating local Akamai candidates (this takes a few seconds)...' -F
 $plan = @(Get-SteamPinPlan -TimeoutSec $TimeoutSec)
 
 $plan | ForEach-Object {
+    $note = ''
+    if (-not $_.Best) {
+        if ($_.Control -and $_.Control.Ok) {
+            if (@($_.Tested | Where-Object { $_.Kind -eq 'TLS_RESET' }).Count -gt 0) {
+                $note = 'Steam SNI reset'
+            }
+            else {
+                $note = 'endpoint failed'
+            }
+        }
+        else {
+            $note = 'path/TLS failed'
+        }
+    }
+
     [pscustomobject]@{
         Host     = $_.Host
         ChosenIP = $(if ($_.Best) { $_.Best.IP } else { '(none)' })
         HTTP     = $(if ($_.Best) { $_.Best.Status } else { 'FAILED' })
         Ms       = $(if ($_.Best) { $_.Best.Ms } else { '' })
+        Note     = $note
     }
 } | Format-Table -AutoSize
 
@@ -96,7 +113,20 @@ $missing = foreach ($hostName in $critical) {
 }
 
 if ($missing -and -not $Force) {
-    throw ("Could not verify: {0}. No changes were made. Use -Force only if you accept the risk." -f ($missing -join ', '))
+    $failed = @($plan | Where-Object { $critical -contains $_.Host -and -not $_.Best })
+    $sniBlocked = @($failed | Where-Object {
+        $_.Control -and $_.Control.Ok -and
+        @($_.Tested | Where-Object { $_.Kind -eq 'TLS_RESET' }).Count -gt 0
+    })
+
+    $hint = if ($sniBlocked.Count -gt 0) {
+        'The active network resets Steam TLS handshakes (SNI filtering); DNS/hosts changes cannot fix that. Retry on the VNPT network this tool targets, or another network that allows Steam TLS.'
+    }
+    else {
+        'Check the active network and retry; no changes were made.'
+    }
+
+    throw ("Could not verify: {0}. No changes were made. {1} Use -Force only if you accept the risk." -f ($missing -join ', '), $hint)
 }
 
 # --- Show or apply NRPT rules. ---

@@ -148,9 +148,22 @@ On the tested VNPT line (HCMC, 4 November 2026):
 - **CDN IPs rotate.** If Steam breaks later, click **Repair bypass** in the GUI
   (or run `.\Enable-SteamBypass.ps1`). It revalidates the candidates and
   rewrites the managed block.
+- **Check the network context.** Each enable, disable, and verification run of
+  the bypass scripts logs the active interface, Wi-Fi SSID, local IP, gateway,
+  and DNS servers; enable/verification also record the public IP/ASN. This makes
+  it obvious when the PC is on a different network than the one the bypass was
+  built for.
+- **Watch for `Steam SNI reset`.** If the candidate table reports that note, or
+  `Test-SteamBypass.ps1` ends with the Steam TLS reset verdict, the active
+  network is resetting Steam TLS handshakes regardless of the destination IP.
+  DNS and hosts changes cannot fix that; use a network that allows Steam TLS
+  (such as the VNPT line this tool targets). `-Force` will install rules that
+  still fail.
 - **Leaving VNPT.** The pins point at VNPT-local Akamai nodes. Click **Turn OFF**
-  in the GUI (or run `.\Disable-SteamBypass.ps1`) when you move to another ISP,
-  or re-run the enable script on the new network so it can revalidate.
+  in the GUI (or run `.\Disable-SteamBypass.ps1`) when you move to another ISP.
+  Re-running the enable script on another network is only useful if that network
+  allows Steam TLS; the VNPT-specific pins cannot help on an SNI-filtering
+  campus or corporate network.
 - **Check state:**
   ```powershell
   Get-DnsClientNrptRule | Where-Object Comment -eq 'VNPT-Steam-Bypass' |
