@@ -24,6 +24,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'SteamBypass.Common.ps1')
 
 Write-SteamBypassHeader 'VNPT Steam bypass - disable'
+Write-SteamNetworkContext -SkipPublicIp
 
 if (-not $DryRun -and -not (Test-IsAdmin)) {
     Write-Host 'Administrator rights are required to remove NRPT rules or edit the hosts file.' -ForegroundColor Red

@@ -53,6 +53,90 @@ function Get-DefaultHostsPath {
     return (Join-Path $env:SystemRoot 'System32\drivers\etc\hosts')
 }
 
+function Get-SteamNetworkContext {
+    param([switch]$SkipPublicIp)
+
+    $context = [pscustomobject]@{
+        Interface = ''
+        SSID      = ''
+        LocalIP   = ''
+        Gateway   = ''
+        DNS       = ''
+        PublicIP  = ''
+        Org       = ''
+    }
+
+    # SSID is only exposed by netsh; Get-NetIPConfiguration does not report it.
+    try {
+        $wifi = & netsh.exe wlan show interfaces 2>$null
+        $ssidLine = @($wifi | Where-Object { $_ -match '^\s*SSID\s*:\s*(.+?)\s*$' } | Select-Object -First 1)
+        if ($ssidLine.Count -gt 0 -and $ssidLine[0] -match '^\s*SSID\s*:\s*(.+?)\s*$') {
+            $context.SSID = $Matches[1]
+        }
+    }
+    catch {
+        # Wi-Fi may be disabled, or netsh may be unavailable.
+    }
+
+    try {
+        $config = Get-NetIPConfiguration -ErrorAction Stop |
+            Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } |
+            Select-Object -First 1
+
+        if ($config) {
+            $context.Interface = [string]$config.InterfaceAlias
+            $context.LocalIP = (@($config.IPv4Address.IPAddress) -join ', ')
+            $context.Gateway = (@($config.IPv4DefaultGateway.NextHop) -join ', ')
+            $context.DNS = (@(
+                $config.DNSServer |
+                    Where-Object { $_.AddressFamily -eq 2 } |
+                    ForEach-Object { $_.ServerAddresses }
+            ) -join ', ')
+        }
+    }
+    catch {
+        # Keep the context partial rather than failing the operation.
+    }
+
+    if (-not $SkipPublicIp) {
+        try {
+            $info = Invoke-RestMethod -Uri 'https://ipinfo.io/json' -TimeoutSec 3 -ErrorAction Stop
+            if ($info.ip) { $context.PublicIP = [string]$info.ip }
+            if ($info.org) { $context.Org = [string]$info.org }
+        }
+        catch {
+            # Public IP is best effort; some networks block the lookup.
+        }
+    }
+
+    return $context
+}
+
+function Write-SteamNetworkContext {
+    param([switch]$SkipPublicIp)
+
+    $context = Get-SteamNetworkContext -SkipPublicIp:$SkipPublicIp
+
+    Write-Host ''
+    Write-Host 'Network context:' -ForegroundColor Cyan
+    Write-Host ("  Interface:  {0}" -f $(if ($context.Interface) { $context.Interface } else { 'unknown' }))
+    if ($context.SSID) {
+        Write-Host ("  SSID:       {0}" -f $context.SSID)
+    }
+    Write-Host ("  Local IP:   {0}" -f $(if ($context.LocalIP) { $context.LocalIP } else { 'unknown' }))
+    Write-Host ("  Gateway:    {0}" -f $(if ($context.Gateway) { $context.Gateway } else { 'unknown' }))
+    Write-Host ("  DNS:        {0}" -f $(if ($context.DNS) { $context.DNS } else { 'unknown' }))
+    if (-not $SkipPublicIp) {
+        if ($context.PublicIP) {
+            $public = if ($context.Org) { "$($context.PublicIP)  $($context.Org)" } else { $context.PublicIP }
+            Write-Host ("  Public IP:  {0}" -f $public)
+        }
+        else {
+            Write-Host '  Public IP:  unavailable' -ForegroundColor DarkYellow
+        }
+    }
+}
+
 function Test-SteamHostName {
     param([string]$HostName)
 
@@ -74,14 +158,19 @@ function Resolve-SteamDns {
     # Resolve-DnsName on current Windows builds still consults the hosts file
     # even with -NoHostsFile, which would make a refresh trust the old pin.
     # nslookup talks to the specified resolver directly and bypasses hosts.
+    #
+    # The trailing dot is important: without it nslookup appends the adapter's
+    # DNS suffix (for example store.steampowered.com.edu.vn) and validates the
+    # wrong name.
     if (-not (Get-Command nslookup.exe -ErrorAction SilentlyContinue)) {
         return @()
     }
 
+    $fqdn = $HostName.Trim().TrimEnd('.') + '.'
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $output = & nslookup.exe -timeout=3 -type=A $HostName $Server 2>&1
+        $output = & nslookup.exe -timeout=3 -type=A $fqdn $Server 2>&1
     }
     finally {
         $ErrorActionPreference = $previousPreference
@@ -102,11 +191,36 @@ function Resolve-SteamDns {
     return @($ips)
 }
 
+function Get-CurlFailureKind {
+    param(
+        [int]$ExitCode,
+        [string]$Text
+    )
+
+    if ($Text -match '(?i)connection was reset|recv failure|reset by peer|ssl.*reset') {
+        return 'TLS_RESET'
+    }
+    if ($ExitCode -eq 28 -or $Text -match '(?i)timed out|timeout') {
+        return 'TIMEOUT'
+    }
+    if ($ExitCode -eq 6) {
+        return 'DNS'
+    }
+    if ($ExitCode -eq 7) {
+        return 'CONNECT'
+    }
+    if ($ExitCode -eq 35) {
+        return 'TLS'
+    }
+    return ("CURL_{0}" -f $ExitCode)
+}
+
 function Test-HttpsViaIp {
     param(
         [string]$HostName,
         [string]$IP,
-        [int]$TimeoutSec = 8
+        [int]$TimeoutSec = 8,
+        [switch]$Insecure
     )
 
     if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
@@ -114,18 +228,24 @@ function Test-HttpsViaIp {
             Ok = $false
             Status = 'curl.exe not found'
             Ms = $null
+            Kind = 'NO_CURL'
         }
     }
 
     # PowerShell 5.1 turns native stderr into a terminating error when
     # $ErrorActionPreference is Stop. curl writes timeouts to stderr, so
     # temporarily relax it and capture both streams.
+    $curlArgs = @(
+        '-sS', '-o', 'NUL', '-w', '%{http_code} %{time_total}',
+        '--noproxy', '*', '--max-time', $TimeoutSec,
+        '--resolve', "${HostName}:443:${IP}", "https://${HostName}/"
+    )
+    if ($Insecure) { $curlArgs = @('-k') + $curlArgs }
+
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $output = & curl.exe -sS -o NUL -w '%{http_code} %{time_total}' `
-            --noproxy '*' --max-time $TimeoutSec `
-            --resolve "${HostName}:443:${IP}" "https://${HostName}/" 2>&1
+        $output = & curl.exe @curlArgs 2>&1
         $exitCode = $LASTEXITCODE
     }
     finally {
@@ -142,6 +262,7 @@ function Test-HttpsViaIp {
             Ok = ($status -ne 0)
             Status = $status
             Ms = [int]($seconds * 1000)
+            Kind = 'OK'
         }
     }
 
@@ -149,6 +270,7 @@ function Test-HttpsViaIp {
         Ok = $false
         Status = $text
         Ms = $null
+        Kind = (Get-CurlFailureKind -ExitCode $exitCode -Text $text)
     }
 }
 
@@ -174,17 +296,41 @@ function Get-BestSteamEndpoint {
             Ok = $test.Ok
             Status = $test.Status
             Ms = $test.Ms
+            Kind = $test.Kind
         }
     }
 
     $best = @($results | Where-Object { $_.Ok } |
         Sort-Object -Property Ms | Select-Object -First 1)
 
+    # If every Steam attempt failed, probe a known non-Steam name against the
+    # first pin. A working control means the path is up but Steam SNI is being
+    # filtered, which is useful in the error message and GUI log.
+    $control = $null
+    if (-not $best) {
+        $controlIp = $null
+        if (@($Candidates).Count -gt 0) {
+            $controlIp = $Candidates[0]
+        }
+        elseif ($ips.Count -gt 0) {
+            $controlIp = $ips[0]
+        }
+
+        if ($controlIp) {
+            # The control only needs to prove that a non-Steam TLS handshake
+            # reaches the edge; certificate validation is deliberately skipped
+            # because the probe IP is not a real example.com edge.
+            $control = Test-HttpsViaIp -HostName 'example.com' -IP $controlIp `
+                -TimeoutSec $TimeoutSec -Insecure
+        }
+    }
+
     return [pscustomobject]@{
         Host = $HostName
         Endpoint = ($best | Select-Object -First 1)
         Best = ($best | Select-Object -First 1)
         Tested = @($results)
+        Control = $control
     }
 }
 

@@ -56,7 +56,10 @@ function Get-DnsResult {
         return [pscustomobject]@{ Status = 'ERROR: nslookup.exe not found'; IPs = @() }
     }
 
-    $arguments = @('-timeout=3', '-type=A', $Name)
+    # Use a trailing dot so nslookup does not append the adapter's DNS suffix
+    # (for example, store.steampowered.com.edu.vn on a campus network).
+    $fqdn = $Name.Trim().TrimEnd('.') + '.'
+    $arguments = @('-timeout=3', '-type=A', $fqdn)
     if ($Server) { $arguments += $Server }
 
     $previousPreference = $ErrorActionPreference

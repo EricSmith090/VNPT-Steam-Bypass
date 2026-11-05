@@ -45,6 +45,7 @@ function Invoke-CurlCheck {
             Status = [int]$match.Groups[1].Value
             Ms = [int]([double]($match.Groups[2].Value -replace ',', '.') * 1000)
             Error = $null
+            Kind = 'OK'
         }
     }
 
@@ -53,10 +54,12 @@ function Invoke-CurlCheck {
         Status = $null
         Ms = $null
         Error = $text
+        Kind = (Get-CurlFailureKind -ExitCode $exitCode -Text $text)
     }
 }
 
 Write-SteamBypassHeader 'VNPT Steam bypass - verification'
+Write-SteamNetworkContext
 
 # --- Configuration state. ---
 $rules = @(Get-DnsClientNrptRule | Where-Object {
@@ -83,29 +86,40 @@ $dnsHosts = @(
     'cdn.akamai.steamstatic.com'
 )
 
+function Format-AddressList {
+    param($Addresses)
+
+    $list = @($Addresses | Where-Object { $_ })
+    if ($list.Count -eq 0) {
+        return 'none'
+    }
+    if ($list.Count -le 3) {
+        return ($list -join ', ')
+    }
+    return (($list[0..2] -join ', ') + (" (+{0} more)" -f ($list.Count - 3)))
+}
+
 Write-Host ''
 Write-Host 'Resolution (app path vs raw Google DNS):' -ForegroundColor Cyan
-$dnsRows = foreach ($hostName in $dnsHosts) {
-    $resolved = ''
+foreach ($hostName in $dnsHosts) {
+    $addresses = @()
     try {
-        $addresses = [System.Net.Dns]::GetHostAddresses($hostName) |
-            Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork } |
-            ForEach-Object { $_.IPAddressToString }
-        $resolved = @($addresses) -join ', '
+        $addresses = @(
+            [System.Net.Dns]::GetHostAddresses($hostName) |
+                Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork } |
+                ForEach-Object { $_.IPAddressToString }
+        )
     }
     catch {
-        $resolved = 'ERROR'
+        $addresses = @()
     }
 
-    $google = @(Resolve-SteamDns -HostName $hostName -Server '8.8.8.8') -join ', '
+    $google = @(Resolve-SteamDns -HostName $hostName -Server '8.8.8.8')
 
-    [pscustomobject]@{
-        Host = $hostName
-        'App path' = $(if ($resolved) { $resolved } else { 'none' })
-        'Google DNS' = $(if ($google) { $google } else { 'none' })
-    }
+    Write-Host ("  {0}" -f $hostName)
+    Write-Host ("    App path:   {0}" -f (Format-AddressList $addresses))
+    Write-Host ("    Google DNS: {0}" -f (Format-AddressList $google))
 }
-$dnsRows | Format-Table -AutoSize
 
 # --- HTTPS checks. ---
 $checks = @(
@@ -131,6 +145,7 @@ $results = foreach ($check in $checks) {
         'Expected' = $check.Expect
         Ms = $(if ($result.Ok) { $result.Ms } else { '' })
         Error = $(if ($result.Ok) { '' } else { $result.Error })
+        Kind = $result.Kind
     }
 }
 $results | Format-Table -AutoSize
@@ -153,5 +168,13 @@ if ($storeOk -or $communityOk) {
     Write-Host 'PARTIAL: at least one Steam endpoint works, but the bypass is incomplete.' -ForegroundColor Yellow
     exit 0
 }
+
+$steamFailures = @($results | Where-Object { $_.Name -ne 'Control' -and $_.HTTP -eq 'FAIL' })
+$sniBlocked = @($steamFailures | Where-Object { $_.Kind -eq 'TLS_RESET' }).Count -gt 0
+if ($controlOk -and $sniBlocked) {
+    Write-Host 'FAIL: Steam TLS is being reset while the non-Steam control works. This network filters Steam SNI; DNS/hosts changes cannot fix it. Use VNPT or another network that allows Steam TLS.' -ForegroundColor Red
+    exit 1
+}
+
 Write-Host 'FAIL: Steam is still blocked. Click Repair bypass in the GUI (or re-run Enable-SteamBypass.ps1) and check the NRPT/hosts state.' -ForegroundColor Red
 exit 1
