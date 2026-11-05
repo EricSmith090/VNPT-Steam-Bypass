@@ -153,5 +153,5 @@ if ($storeOk -or $communityOk) {
     Write-Host 'PARTIAL: at least one Steam endpoint works, but the bypass is incomplete.' -ForegroundColor Yellow
     exit 0
 }
-Write-Host 'FAIL: Steam is still blocked. Re-run Enable-SteamBypass.ps1 or check the NRPT/hosts state.' -ForegroundColor Red
+Write-Host 'FAIL: Steam is still blocked. Click Repair bypass in the GUI (or re-run Enable-SteamBypass.ps1) and check the NRPT/hosts state.' -ForegroundColor Red
 exit 1

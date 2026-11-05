@@ -4,6 +4,10 @@ A targeted workaround for the VNPT Steam block documented in
 [`VNPT-Steam-Report.md`](VNPT-Steam-Report.md). It uses **split DNS plus a small
 hosts pin list** instead of a VPN or proxy.
 
+For a click-to-toggle experience, use the standalone GUI at
+`dist\VNPT-Steam-Bypass.exe`; the PowerShell scripts remain available for
+command-line use.
+
 ## What it changes
 
 | Layer | Change | Scope |
@@ -32,13 +36,49 @@ unaffected.
 
 | File | Purpose |
 |---|---|
+| `dist\VNPT-Steam-Bypass.exe` | Built standalone GUI (after running `Build-Exe.ps1`) |
+| `Build-Exe.ps1` | Builds the GUI EXE and embeds the PowerShell scripts |
+| `src\SteamBypassGui.cs` | GUI application source |
+| `src\UiControls.cs` | Dark-theme WinForms controls |
+| `src\app.manifest` | Requests administrator rights for the EXE |
 | `Enable-SteamBypass.ps1` | Adds the NRPT rules and managed hosts block; backs up `hosts` first |
 | `Disable-SteamBypass.ps1` | Removes the rules/block and restores the previous Steam hosts lines |
 | `Test-SteamBypass.ps1` | Verifies DNS, NRPT, hosts, and real HTTPS responses |
 | `SteamBypass.Common.ps1` | Shared helpers and domain lists |
 | `Test-SteamVnpt.ps1` | Original read-only baseline diagnostic from the report |
 
-## Usage
+## GUI (recommended)
+
+`dist\VNPT-Steam-Bypass.exe` is a standalone Windows GUI for the same bypass.
+It embeds the four PowerShell scripts, so the EXE can be copied anywhere on
+this PC and run by itself.
+
+1. Double-click the EXE and accept the UAC prompt.
+2. The status card shows **BYPASS IS ON**, **OFF**, or **PARTIAL**.
+3. Click **Turn ON** / **Turn OFF** / **Repair bypass** to change it.
+4. Click **Test connection** to run the same checks as
+   `Test-SteamBypass.ps1`.
+5. Click **Open data folder** to see `%ProgramData%\VNPT-Steam-Bypass`, where
+   the EXE extracts the embedded scripts and writes logs and hosts backups.
+
+The GUI requires administrator rights because it changes NRPT rules and the
+`hosts` file. The scripts are re-extracted every time the EXE starts, so the
+EXE always uses the scripts that were embedded when it was built.
+
+To rebuild after changing the scripts or the GUI source:
+
+```powershell
+.\Build-Exe.ps1
+```
+
+Requirements: Windows 10/11 with .NET Framework 4.x (included with Windows).
+The build uses the .NET Framework compiler (`csc.exe`); no SDK is required.
+
+The EXE is not code-signed. If Windows SmartScreen shows a warning, choose
+**More info** → **Run anyway**. Windows will also ask for administrator rights
+through UAC because the tool changes system DNS and the `hosts` file.
+
+## Command-line usage
 
 Open **PowerShell as Administrator**, then:
 
@@ -60,7 +100,7 @@ still shows the old page, run `ipconfig /flushdns` or restart the browser.
 
 ## Rollback
 
-Run PowerShell as Administrator:
+Click **Turn OFF** in the GUI, or run PowerShell as Administrator:
 
 ```powershell
 Set-Location 'C:\Users\MSI VN\Desktop\VNPT-Steam-Bypass'
@@ -69,7 +109,9 @@ Set-Location 'C:\Users\MSI VN\Desktop\VNPT-Steam-Bypass'
 
 This removes the NRPT rules, removes the managed hosts block, and restores any
 Steam hosts entries that were disabled by the enable script. A timestamped
-backup of `hosts` is written to `.\backups\` before every change.
+backup of `hosts` is written before every change: next to the scripts when run
+from PowerShell, or in `%ProgramData%\VNPT-Steam-Bypass\scripts\backups` when
+run from the GUI.
 
 ## How it works
 
@@ -103,12 +145,12 @@ On the tested VNPT line (HCMC, 4 November 2026):
 
 ## Refresh and troubleshooting
 
-- **CDN IPs rotate.** If Steam breaks later, run
-  `.\Enable-SteamBypass.ps1` again. It revalidates the candidates and rewrites
-  the managed block.
-- **Leaving VNPT.** The pins point at VNPT-local Akamai nodes. Run
-  `.\Disable-SteamBypass.ps1` when you move to another ISP, or re-run the
-  enable script on the new network so it can revalidate.
+- **CDN IPs rotate.** If Steam breaks later, click **Repair bypass** in the GUI
+  (or run `.\Enable-SteamBypass.ps1`). It revalidates the candidates and
+  rewrites the managed block.
+- **Leaving VNPT.** The pins point at VNPT-local Akamai nodes. Click **Turn OFF**
+  in the GUI (or run `.\Disable-SteamBypass.ps1`) when you move to another ISP,
+  or re-run the enable script on the new network so it can revalidate.
 - **Check state:**
   ```powershell
   Get-DnsClientNrptRule | Where-Object Comment -eq 'VNPT-Steam-Bypass' |
@@ -122,9 +164,9 @@ On the tested VNPT line (HCMC, 4 November 2026):
   (Chrome/Edge: Settings → Privacy → Use secure DNS; Firefox: Network Settings
   → Enable DNS over HTTPS). A browser using its own DoH resolver bypasses the
   Windows resolver, NRPT, and the hosts file.
-- **A VPN is active.** Disable the bypass first
-  (`.\Disable-SteamBypass.ps1`), because NRPT rules can override the VPN's DNS
-  for Steam names and cause a DNS leak or a broken tunnel.
+- **A VPN is active.** Disable the bypass first (click **Turn OFF** in the GUI,
+  or run `.\Disable-SteamBypass.ps1`), because NRPT rules can override the VPN's
+  DNS for Steam names and cause a DNS leak or a broken tunnel.
 
 ## Caveats
 
