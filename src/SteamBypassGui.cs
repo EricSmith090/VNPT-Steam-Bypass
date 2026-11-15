@@ -14,11 +14,11 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-[assembly: AssemblyTitle("VNPT Steam Bypass")]
-[assembly: AssemblyProduct("VNPT Steam Bypass")]
-[assembly: AssemblyDescription("Turn the VNPT Steam split-DNS bypass on or off.")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyTitle("Steam Bypass")]
+[assembly: AssemblyProduct("Steam Bypass")]
+[assembly: AssemblyDescription("VNPT split-DNS or Campus/HCMUS relay, selectable in one app.")]
+[assembly: AssemblyVersion("2.0.0.0")]
+[assembly: AssemblyFileVersion("2.0.0.0")]
 
 namespace VnptSteamBypass
 {
@@ -38,50 +38,81 @@ namespace VnptSteamBypass
 
         private static readonly string[] ScriptFiles = new string[]
         {
-            "SteamBypass.Common.ps1",
-            "Enable-SteamBypass.ps1",
-            "Disable-SteamBypass.ps1",
-            "Test-SteamBypass.ps1"
+            "VnptBypass.Common.ps1",
+            "Enable-VnptBypass.ps1",
+            "Disable-VnptBypass.ps1",
+            "Test-VnptBypass.ps1"
         };
 
         [STAThread]
         private static void Main(string[] args)
         {
-            string screenshotPath = null;
-            if (args != null && args.Length >= 2 &&
-                string.Equals(args[0], "--screenshot", StringComparison.OrdinalIgnoreCase))
+            if (args != null && args.Length > 0 &&
+                string.Equals(args[0], "--relay", StringComparison.OrdinalIgnoreCase))
             {
-                screenshotPath = args[1];
+                string[] relayArgs = new string[Math.Max(0, args.Length - 1)];
+                if (relayArgs.Length > 0)
+                {
+                    Array.Copy(args, 1, relayArgs, 0, relayArgs.Length);
+                }
+                Environment.ExitCode = SteamSnIRelayProgram.Run(relayArgs);
+                return;
+            }
+
+            string screenshotPath = null;
+            bool elevated = false;
+            bool autoApply = false;
+            string initialMode = null;
+
+            if (args != null)
+            {
+                for (int i = 0; i < args.Length; i++)
+                {
+                    string arg = args[i] == null ? string.Empty : args[i].ToLowerInvariant();
+                    if (arg == "--screenshot" && i + 1 < args.Length)
+                    {
+                        screenshotPath = args[++i];
+                    }
+                    else if (arg == "--elevated")
+                    {
+                        elevated = true;
+                    }
+                    else if (arg == "--auto")
+                    {
+                        autoApply = true;
+                    }
+                    else if (arg == "--mode" && i + 1 < args.Length)
+                    {
+                        initialMode = args[++i];
+                    }
+                }
+            }
+
+            string runtimeError = null;
+            try
+            {
+                EnsureRuntime();
+            }
+            catch (Exception ex)
+            {
+                runtimeError = ex.Message;
             }
 
             bool createdNew = false;
-            using (Mutex mutex = new Mutex(true, @"Local\VNPT-Steam-Bypass-GUI", out createdNew))
+            string mutexName = elevated
+                ? @"Local\SteamBypass-GUI-Elevated"
+                : @"Local\SteamBypass-GUI";
+
+            using (Mutex mutex = new Mutex(true, mutexName, out createdNew))
             {
                 if (!createdNew)
                 {
                     MessageBox.Show(
-                        "The VNPT Steam Bypass window is already open.",
-                        "VNPT Steam Bypass",
+                        "The Steam Bypass window is already open.",
+                        "Steam Bypass",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Information);
                     return;
-                }
-
-                try
-                {
-                    EnsureRuntime();
-                }
-                catch (Exception ex)
-                {
-                    if (screenshotPath == null)
-                    {
-                        MessageBox.Show(
-                            "Could not prepare the application files.\r\n\r\n" + ex.Message,
-                            "VNPT Steam Bypass",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Error);
-                        return;
-                    }
                 }
 
                 Application.EnableVisualStyles();
@@ -89,11 +120,11 @@ namespace VnptSteamBypass
 
                 if (screenshotPath != null)
                 {
-                    CaptureScreenshot(screenshotPath);
+                    CaptureScreenshot(screenshotPath, initialMode);
                     return;
                 }
 
-                Application.Run(new MainForm());
+                Application.Run(new MainForm(initialMode, autoApply, runtimeError));
             }
         }
 
@@ -129,6 +160,15 @@ namespace VnptSteamBypass
             foreach (string file in ScriptFiles)
             {
                 string resourceName = "Scripts." + file;
+                string destination = Path.Combine(ScriptDir, file);
+
+                // A standard-user launch can still use the GUI and Campus mode.
+                // VNPT mode is elevated, and that launch refreshes the scripts.
+                if (!IsAdministrator() && File.Exists(destination))
+                {
+                    continue;
+                }
+
                 using (Stream stream = assembly.GetManifestResourceStream(resourceName))
                 {
                     if (stream == null)
@@ -139,7 +179,6 @@ namespace VnptSteamBypass
                     using (StreamReader reader = new StreamReader(stream, Encoding.UTF8, true))
                     {
                         string content = reader.ReadToEnd();
-                        string destination = Path.Combine(ScriptDir, file);
                         File.WriteAllText(destination, content, new UTF8Encoding(false));
                     }
                 }
@@ -293,9 +332,9 @@ namespace VnptSteamBypass
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint flags);
 
-        private static void CaptureScreenshot(string path)
+        private static void CaptureScreenshot(string path, string initialMode)
         {
-            using (MainForm form = new MainForm())
+            using (MainForm form = new MainForm(initialMode, false, null))
             {
                 form.Show();
                 form.Activate();
@@ -342,6 +381,12 @@ namespace VnptSteamBypass
             Partial
         }
 
+        private enum BypassMode
+        {
+            Vnpt,
+            Campus
+        }
+
         private static readonly Color WindowBack = Color.FromArgb(15, 23, 42);
         private static readonly Color PanelBack = Color.FromArgb(30, 41, 59);
         private static readonly Color PanelBorder = Color.FromArgb(51, 65, 85);
@@ -363,8 +408,17 @@ namespace VnptSteamBypass
             int size);
 
         private readonly bool _isAdministrator;
+        private readonly string _initialMode;
+        private readonly string _runtimeError;
+        private readonly bool _hasInitialMode;
+        private bool _autoApply;
+        private bool _modeInitialized;
         private BypassState _state = BypassState.Off;
+        private BypassMode _mode = BypassMode.Vnpt;
+        private BypassMode? _activeMode;
         private bool _busy;
+
+        private CampusStatus _Campus = new CampusStatus();
 
         private RoundedPanel _statusCard;
         private Label _statusLabel;
@@ -375,13 +429,25 @@ namespace VnptSteamBypass
         private RoundedButton _testButton;
         private RoundedButton _refreshButton;
         private RoundedButton _folderButton;
+        private RoundedButton _VnptModeButton;
+        private RoundedButton _CampusModeButton;
         private RichTextBox _logBox;
         private LinkLabel _clearLink;
         private StringBuilder _runOutput;
 
         public MainForm()
+            : this(null, false, null)
+        {
+        }
+
+        public MainForm(string initialMode, bool autoApply, string runtimeError)
         {
             _isAdministrator = Program.IsAdministrator();
+            _initialMode = initialMode;
+            _hasInitialMode = !string.IsNullOrEmpty(initialMode);
+            _autoApply = autoApply;
+            _runtimeError = runtimeError;
+            _mode = _hasInitialMode ? ParseMode(initialMode) : LoadSavedMode();
             InitializeWindow();
             BuildLayout();
             Shown += MainForm_Shown;
@@ -390,9 +456,9 @@ namespace VnptSteamBypass
 
         private void InitializeWindow()
         {
-            Text = "VNPT Steam Bypass";
-            ClientSize = new Size(880, 670);
-            MinimumSize = new Size(760, 600);
+            Text = "Steam Bypass";
+            ClientSize = new Size(880, 700);
+            MinimumSize = new Size(760, 630);
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = WindowBack;
             ForeColor = TextMain;
@@ -470,7 +536,7 @@ namespace VnptSteamBypass
             title.BackColor = Color.Transparent;
             title.ForeColor = TextMain;
             title.Font = new Font("Segoe UI", 17F, FontStyle.Bold);
-            title.Text = "VNPT Steam Bypass";
+            title.Text = "Steam Bypass";
 
             Label subtitle = new Label();
             subtitle.AutoSize = true;
@@ -478,7 +544,7 @@ namespace VnptSteamBypass
             subtitle.BackColor = Color.Transparent;
             subtitle.ForeColor = TextMuted;
             subtitle.Font = new Font("Segoe UI", 9.25F, FontStyle.Regular);
-            subtitle.Text = "Split-DNS workaround for the Steam block on VNPT";
+            subtitle.Text = "Choose VNPT split-DNS or Campus/HCMUS local relay";
 
             header.Controls.Add(iconBox);
             header.Controls.Add(title);
@@ -491,20 +557,65 @@ namespace VnptSteamBypass
             TableLayoutPanel content = new TableLayoutPanel();
             content.Dock = DockStyle.Fill;
             content.ColumnCount = 1;
-            content.RowCount = 4;
+            content.RowCount = 5;
             content.Margin = new Padding(0);
-            content.Padding = new Padding(24, 18, 24, 12);
+            content.Padding = new Padding(24, 12, 24, 12);
             content.BackColor = WindowBack;
+            content.RowStyles.Add(new RowStyle(SizeType.Absolute, 46F));
             content.RowStyles.Add(new RowStyle(SizeType.Absolute, 138F));
             content.RowStyles.Add(new RowStyle(SizeType.Absolute, 56F));
             content.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
             content.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            content.Controls.Add(BuildStatusCard(), 0, 0);
-            content.Controls.Add(BuildButtonRow(), 0, 1);
-            content.Controls.Add(BuildActivityRow(), 0, 2);
-            content.Controls.Add(BuildLogCard(), 0, 3);
+            content.Controls.Add(BuildModeRow(), 0, 0);
+            content.Controls.Add(BuildStatusCard(), 0, 1);
+            content.Controls.Add(BuildButtonRow(), 0, 2);
+            content.Controls.Add(BuildActivityRow(), 0, 3);
+            content.Controls.Add(BuildLogCard(), 0, 4);
             return content;
+        }
+
+        private Control BuildModeRow()
+        {
+            FlowLayoutPanel row = new FlowLayoutPanel();
+            row.Dock = DockStyle.Fill;
+            row.Margin = new Padding(0);
+            row.Padding = new Padding(0, 6, 0, 2);
+            row.FlowDirection = FlowDirection.LeftToRight;
+            row.WrapContents = false;
+            row.BackColor = WindowBack;
+
+            Label label = new Label();
+            label.Width = 112;
+            label.Height = 34;
+            label.Margin = new Padding(0);
+            label.BackColor = Color.Transparent;
+            label.ForeColor = TextMuted;
+            label.Font = new Font("Segoe UI", 8.25F, FontStyle.Bold);
+            label.TextAlign = ContentAlignment.MiddleLeft;
+            label.Text = "MODE";
+
+            _VnptModeButton = CreateButton("VNPT (split DNS)", 162);
+            _VnptModeButton.Click += ModeButton_Click;
+
+            _CampusModeButton = CreateButton("Campus (HCMUS relay)", 190);
+            _CampusModeButton.Click += ModeButton_Click;
+
+            Label hint = new Label();
+            hint.AutoSize = true;
+            hint.Height = 34;
+            hint.Margin = new Padding(14, 0, 0, 0);
+            hint.BackColor = Color.Transparent;
+            hint.ForeColor = TextMuted;
+            hint.Font = new Font("Segoe UI", 8.25F, FontStyle.Regular);
+            hint.TextAlign = ContentAlignment.MiddleLeft;
+            hint.Text = "VNPT: DNS + hosts   |   Campus: local TLS relay + PAC";
+
+            row.Controls.Add(label);
+            row.Controls.Add(_VnptModeButton);
+            row.Controls.Add(_CampusModeButton);
+            row.Controls.Add(hint);
+            return row;
         }
 
         private Control BuildStatusCard()
@@ -740,7 +851,7 @@ namespace VnptSteamBypass
             version.BackColor = Color.Transparent;
             version.ForeColor = Color.FromArgb(100, 116, 139);
             version.Font = new Font("Segoe UI", 8.25F, FontStyle.Regular);
-            version.Text = "v1.0";
+            version.Text = "v2.0";
 
             grid.Controls.Add(_adminLabel, 0, 0);
             grid.Controls.Add(_lastTestLabel, 1, 0);
@@ -749,14 +860,60 @@ namespace VnptSteamBypass
             return footer;
         }
 
-        private void MainForm_Shown(object sender, EventArgs e)
+        private async void MainForm_Shown(object sender, EventArgs e)
         {
             RefreshStatus();
-            AppendLog("VNPT Steam Bypass is ready.", TextMain);
+            AppendLog("Steam Bypass is ready.", TextMain);
+            AppendLog("Mode: " + ModeName(_mode), TextMuted);
             AppendLog("Data folder: " + Program.DataDir, TextMuted);
             AppendLog("All changes are local to this PC.", TextMuted);
             AppendLog("Current state: " + StateName(_state), TextMuted);
             AppendLog("", TextMuted);
+
+            if (!string.IsNullOrEmpty(_runtimeError))
+            {
+                AddOutputLine("ERROR: " + _runtimeError, true);
+                MessageBox.Show(
+                    this,
+                    "The embedded scripts could not be prepared.\r\n\r\n" + _runtimeError,
+                    "Steam Bypass",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+
+            if (_autoApply)
+            {
+                _autoApply = false;
+                await AutoEnableSelectedModeAsync();
+            }
+        }
+
+        private async Task AutoEnableSelectedModeAsync()
+        {
+            if (_mode == BypassMode.Campus)
+            {
+                if (!_Campus.On)
+                {
+                    await EnableCampusAsync(false);
+                }
+                return;
+            }
+
+            if (_state == BypassState.On)
+            {
+                return;
+            }
+
+            int exitCode = await RunScriptAsync(
+                "Enable-VnptBypass.ps1",
+                null,
+                "Turning the VNPT bypass ON",
+                false);
+            if (exitCode == 0)
+            {
+                ResetLastTest();
+                AppendLog("VNPT bypass is ON.", Green);
+            }
         }
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
@@ -767,7 +924,7 @@ namespace VnptSteamBypass
                 MessageBox.Show(
                     this,
                     "An operation is still running. Please wait for it to finish.",
-                    "VNPT Steam Bypass",
+                    "Steam Bypass",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
             }
@@ -791,52 +948,46 @@ namespace VnptSteamBypass
                 rules = 0;
             }
 
-            if (!known)
+            CampusStatus Campus = CampusMode.GetStatus();
+            _Campus = Campus;
+
+            BypassMode? active = null;
+            if (Campus.AnyState)
             {
-                _state = BypassState.Partial;
-                SetStatus("BYPASS IS UNKNOWN", Amber);
-                SetDetail("Could not read the current NRPT or hosts state. Click Repair bypass to reapply.");
-                SetAction("Repair bypass", BrightAmber, Color.White);
+                active = BypassMode.Campus;
             }
-            else if (rules > 0 && hasBlock)
+            else if (known && (rules > 0 || hasBlock))
             {
-                _state = BypassState.On;
-                SetStatus("BYPASS IS ON", Green);
-                if (pins > 0)
-                {
-                    SetDetail(string.Format(
-                        "{0} NRPT rules and {1} host pins. Steam DNS uses Google; pinned names skip DNS.",
-                        rules, pins));
-                }
-                else
-                {
-                    SetDetail(string.Format(
-                        "{0} NRPT rules. DNS-only mode (no hosts pins).", rules));
-                }
-                SetAction("Turn OFF", BrightRed, Color.White);
+                active = BypassMode.Vnpt;
             }
-            else if (rules == 0 && !hasBlock)
+            _activeMode = active;
+
+            if (!_modeInitialized)
             {
-                _state = BypassState.Off;
-                SetStatus("BYPASS IS OFF", TextMuted);
-                SetDetail("Nothing is installed. Steam uses your normal resolver and hosts file.");
-                SetAction("Turn ON", BrightGreen, Color.White);
+                if (!_hasInitialMode && active.HasValue)
+                {
+                    _mode = active.Value;
+                    SaveMode();
+                }
+                _modeInitialized = true;
+            }
+
+            UpdateModeButtons();
+
+            if (_mode == BypassMode.Campus)
+            {
+                RefreshCampusStatus();
             }
             else
             {
-                _state = BypassState.Partial;
-                SetStatus("BYPASS IS PARTIAL", Amber);
-                if (rules > 0)
-                {
-                    SetDetail(string.Format(
-                        "{0} NRPT rules but no hosts block. Click Repair bypass.", rules));
-                }
-                else
-                {
-                    SetDetail(string.Format(
-                        "Hosts block present ({0} pins) but no NRPT rules. Click Repair bypass.", pins));
-                }
-                SetAction("Repair bypass", BrightAmber, Color.White);
+                RefreshVnptStatus(rules, hasBlock, pins, known);
+            }
+
+            if (_activeMode.HasValue && _activeMode.Value != _mode)
+            {
+                SetDetail(_detailLabel.Text +
+                    " The " + ModeName(_activeMode.Value) +
+                    " mode is currently active; it is turned off automatically before this mode is enabled.");
             }
 
             if (!_isAdministrator)
@@ -853,18 +1004,478 @@ namespace VnptSteamBypass
                 _actionButton.Enabled = true;
             }
 
-            if (_state == BypassState.On)
+            Text = "Steam Bypass - " + ModeShortName(_mode) + " " + StateName(_state);
+        }
+
+        private void RefreshVnptStatus(int rules, bool hasBlock, int pins, bool known)
+        {
+            if (!known)
             {
-                Text = "VNPT Steam Bypass - ON";
+                _state = BypassState.Partial;
+                SetStatus("VNPT MODE IS UNKNOWN", Amber);
+                SetDetail("Could not read the current NRPT or hosts state. Click Repair bypass to reapply.");
+                SetAction("Repair bypass", BrightAmber, Color.White);
             }
-            else if (_state == BypassState.Off)
+            else if (rules > 0 && hasBlock)
             {
-                Text = "VNPT Steam Bypass - OFF";
+                _state = BypassState.On;
+                SetStatus("VNPT MODE IS ON", Green);
+                if (pins > 0)
+                {
+                    SetDetail(string.Format(
+                        "{0} NRPT rules and {1} host pins. Steam DNS uses Google; pinned names skip DNS.",
+                        rules, pins));
+                }
+                else
+                {
+                    SetDetail(string.Format(
+                        "{0} NRPT rules. DNS-only mode (no hosts pins).", rules));
+                }
+                SetAction("Turn OFF", BrightRed, Color.White);
+            }
+            else if (rules == 0 && !hasBlock)
+            {
+                _state = BypassState.Off;
+                SetStatus("VNPT MODE IS OFF", TextMuted);
+                SetDetail("Nothing is installed. Steam uses your normal resolver and hosts file.");
+                SetAction("Turn ON", BrightGreen, Color.White);
             }
             else
             {
-                Text = "VNPT Steam Bypass - PARTIAL";
+                _state = BypassState.Partial;
+                SetStatus("VNPT MODE IS PARTIAL", Amber);
+                if (rules > 0)
+                {
+                    SetDetail(string.Format(
+                        "{0} NRPT rules but no hosts block. Click Repair bypass.", rules));
+                }
+                else
+                {
+                    SetDetail(string.Format(
+                        "Hosts block present ({0} pins) but no NRPT rules. Click Repair bypass.", pins));
+                }
+                SetAction("Repair bypass", BrightAmber, Color.White);
             }
+        }
+
+        private void RefreshCampusStatus()
+        {
+            if (_Campus.On)
+            {
+                _state = BypassState.On;
+                SetStatus("CAMPUS MODE IS ON", Green);
+                SetDetail(string.Format(
+                    "Relay 127.0.0.1:{0}; PAC http://127.0.0.1:{1}/steam.pac. " +
+                    "Steam/Valve traffic is fragmented locally; everything else stays direct.",
+                    _Campus.RelayPort, _Campus.PacPort));
+                SetAction("Turn OFF", BrightRed, Color.White);
+            }
+            else if (_Campus.AnyState)
+            {
+                _state = BypassState.Partial;
+                SetStatus("CAMPUS MODE IS PARTIAL", Amber);
+                SetDetail(BuildCampusPartialDetail());
+                SetAction("Repair mode", BrightAmber, Color.White);
+            }
+            else
+            {
+                _state = BypassState.Off;
+                SetStatus("CAMPUS MODE IS OFF", TextMuted);
+                SetDetail("Nothing is installed. Turn it ON to start the local TLS relay and HTTP PAC.");
+                SetAction("Turn ON", BrightGreen, Color.White);
+            }
+        }
+
+        private string BuildCampusPartialDetail()
+        {
+            List<string> missing = new List<string>();
+            if (!_Campus.RelayRunning)
+            {
+                missing.Add("the relay is not running");
+            }
+            if (!_Campus.ProxyConfigured)
+            {
+                missing.Add("the PAC proxy is not configured");
+            }
+            else if (!_Campus.PacAvailable)
+            {
+                missing.Add("the PAC file is missing");
+            }
+            else if (!_Campus.PacContentOk)
+            {
+                missing.Add("the PAC file is invalid");
+            }
+            if (_Campus.RelayPort <= 0)
+            {
+                missing.Add("the relay port is unknown");
+            }
+            if (_Campus.PacPort <= 0)
+            {
+                missing.Add("the PAC port is unknown");
+            }
+
+            string detail = missing.Count == 0
+                ? "The relay and PAC are running, but the mode is not fully configured."
+                : "Detected leftover Campus/HCMUS state: " + string.Join(", ", missing.ToArray()) + ".";
+            return detail + " Click Repair mode to rebuild the relay and PAC.";
+        }
+
+        private void UpdateModeButtons()
+        {
+            StyleModeButton(_VnptModeButton, _mode == BypassMode.Vnpt);
+            StyleModeButton(_CampusModeButton, _mode == BypassMode.Campus);
+        }
+
+        private static void StyleModeButton(RoundedButton button, bool selected)
+        {
+            if (button == null)
+            {
+                return;
+            }
+
+            if (selected)
+            {
+                button.BackColor = Color.FromArgb(37, 99, 235);
+                button.ForeColor = Color.White;
+                button.HoverBackColor = Color.FromArgb(29, 78, 216);
+                button.PressedBackColor = Color.FromArgb(30, 64, 175);
+                button.BorderColor = Color.FromArgb(59, 130, 246);
+            }
+            else
+            {
+                button.BackColor = PanelBack;
+                button.ForeColor = TextMuted;
+                button.HoverBackColor = Color.FromArgb(39, 52, 73);
+                button.PressedBackColor = Color.FromArgb(30, 41, 59);
+                button.BorderColor = PanelBorder;
+            }
+
+            button.Invalidate();
+        }
+
+        private static string ModeName(BypassMode mode)
+        {
+            return mode == BypassMode.Campus ? "Campus/HCMUS" : "VNPT";
+        }
+
+        private static string ModeShortName(BypassMode mode)
+        {
+            return mode == BypassMode.Campus ? "Campus" : "VNPT";
+        }
+
+        private static BypassMode ParseMode(string value)
+        {
+            if (!string.IsNullOrEmpty(value) &&
+                (value.IndexOf("campus", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 value.IndexOf("hcmus", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 value.IndexOf("relay", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 value.IndexOf("viettel", StringComparison.OrdinalIgnoreCase) >= 0))
+            {
+                return BypassMode.Campus;
+            }
+            return BypassMode.Vnpt;
+        }
+
+        private static string ModeFilePath
+        {
+            get { return Path.Combine(Program.DataDir, "mode.txt"); }
+        }
+
+        private static BypassMode LoadSavedMode()
+        {
+            try
+            {
+                if (File.Exists(ModeFilePath))
+                {
+                    return ParseMode(File.ReadAllText(ModeFilePath).Trim());
+                }
+            }
+            catch
+            {
+                // A missing or unreadable preference falls back to VNPT.
+            }
+            return BypassMode.Vnpt;
+        }
+
+        private static void SaveMode(BypassMode mode)
+        {
+            try
+            {
+                Directory.CreateDirectory(Program.DataDir);
+                File.WriteAllText(
+                    ModeFilePath,
+                    mode == BypassMode.Campus ? "campus" : "vnpt",
+                    new UTF8Encoding(false));
+            }
+            catch
+            {
+                // Remembering the last mode is a convenience, not a requirement.
+            }
+        }
+
+        private void SaveMode()
+        {
+            SaveMode(_mode);
+        }
+
+        private BypassMode? GetActiveModeNow()
+        {
+            try
+            {
+                if (CampusMode.GetStatus().AnyState)
+                {
+                    return BypassMode.Campus;
+                }
+            }
+            catch
+            {
+                // Fall through to the VNPT check.
+            }
+
+            int rules = Program.CountNrptRules();
+            bool hasBlock;
+            int pins;
+            if (Program.TryReadHosts(out hasBlock, out pins) && (rules > 0 || hasBlock))
+            {
+                return BypassMode.Vnpt;
+            }
+            return null;
+        }
+
+        private void EngineLog(string message)
+        {
+            AddOutputLine(message == null ? string.Empty : message, false);
+        }
+
+        private async void ModeButton_Click(object sender, EventArgs e)
+        {
+            if (_busy)
+            {
+                return;
+            }
+
+            BypassMode target = ReferenceEquals(sender, _CampusModeButton)
+                ? BypassMode.Campus
+                : BypassMode.Vnpt;
+            if (target == _mode)
+            {
+                return;
+            }
+
+            BypassMode? active = GetActiveModeNow();
+            if (active.HasValue && active.Value != target)
+            {
+                string question = active.Value == BypassMode.Campus
+                    ? "Switching to VNPT mode will stop the Campus/HCMUS relay and restore your proxy settings.\r\n\r\nContinue?"
+                    : "Switching to Campus mode will turn off the VNPT split-DNS bypass and restore DNS and hosts.\r\n\r\nContinue?";
+                DialogResult answer = MessageBox.Show(
+                    this,
+                    question,
+                    "Switch mode",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button2);
+                if (answer != DialogResult.Yes)
+                {
+                    return;
+                }
+
+                if (!await DisableModeAsync(active.Value))
+                {
+                    RefreshStatus();
+                    return;
+                }
+            }
+
+            _mode = target;
+            _modeInitialized = true;
+            SaveMode();
+            RefreshStatus();
+            AppendLog("Mode selected: " + ModeName(_mode) + ".", TextMain);
+        }
+
+        private async Task<bool> DisableModeAsync(BypassMode mode)
+        {
+            if (mode == BypassMode.Campus)
+            {
+                SetBusy(true, "Turning Campus/HCMUS mode OFF");
+                try
+                {
+                    await Task.Run(delegate
+                    {
+                        CampusMode.Disable(EngineLog);
+                    });
+                    ResetLastTest();
+                    AppendLog("Campus/HCMUS mode is OFF. Proxy settings restored.", Green);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    AddOutputLine("ERROR: " + ex.Message, true);
+                    MessageBox.Show(
+                        this,
+                        "Could not turn Campus/HCMUS mode off.\r\n\r\n" + ex.Message,
+                        "Steam Bypass",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                    return false;
+                }
+                finally
+                {
+                    SetBusy(false, null);
+                }
+            }
+
+            int exitCode = await RunScriptAsync(
+                "Disable-VnptBypass.ps1",
+                null,
+                "Turning the VNPT bypass OFF",
+                true);
+            return exitCode == 0;
+        }
+
+        private async Task<bool> PrepareModeEnableAsync(BypassMode mode)
+        {
+            BypassMode? active = GetActiveModeNow();
+            if (!active.HasValue || active.Value == mode)
+            {
+                return true;
+            }
+
+            string question = active.Value == BypassMode.Campus
+                ? "The Campus/HCMUS relay is active. Turn it off and restore proxy settings before enabling VNPT mode?"
+                : "The VNPT bypass is active. Turn it off and restore DNS and hosts before enabling Campus mode?";
+            DialogResult answer = MessageBox.Show(
+                this,
+                question,
+                "Switch mode",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2);
+            if (answer != DialogResult.Yes)
+            {
+                return false;
+            }
+
+            return await DisableModeAsync(active.Value);
+        }
+
+        private async Task EnableCampusAsync(bool interactive)
+        {
+            if (!await PrepareModeEnableAsync(BypassMode.Campus))
+            {
+                return;
+            }
+
+            SetBusy(true, "Turning Campus/HCMUS mode ON");
+            CampusStatus status = null;
+            try
+            {
+                status = await Task.Run(delegate
+                {
+                    return CampusMode.Enable(EngineLog);
+                });
+                ResetLastTest();
+                AppendLog("Campus/HCMUS mode is ON.", Green);
+
+                if (interactive && status != null && status.On)
+                {
+                    MessageBox.Show(
+                        this,
+                        "Campus/HCMUS mode enabled.\r\n\r\n" +
+                        "Fully quit Steam (including the tray icon), then start it again.",
+                        "Steam Bypass",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+                else if (interactive)
+                {
+                    MessageBox.Show(
+                        this,
+                        "The relay or PAC did not become fully active.\r\n\r\n" +
+                        "Click Test connection for details, or click Repair mode to try again.",
+                        "Steam Bypass",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                AddOutputLine("ERROR: " + ex.Message, true);
+                if (interactive)
+                {
+                    MessageBox.Show(
+                        this,
+                        "Could not turn Campus/HCMUS mode on.\r\n\r\n" + ex.Message,
+                        "Steam Bypass",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                }
+            }
+            finally
+            {
+                SetBusy(false, null);
+            }
+        }
+
+        private async Task DisableCampusAsync(bool interactive)
+        {
+            if (interactive)
+            {
+                DialogResult answer = MessageBox.Show(
+                    this,
+                    "Turn Campus/HCMUS mode OFF and restore the previous proxy settings?",
+                    "Turn off Campus mode",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button2);
+                if (answer != DialogResult.Yes)
+                {
+                    return;
+                }
+            }
+
+            await DisableModeAsync(BypassMode.Campus);
+        }
+
+        private void ShowTestResult(string verdict, int exitCode)
+        {
+            UpdateLastTest(verdict);
+
+            if (string.IsNullOrEmpty(verdict))
+            {
+                AppendLog("The test did not return a PASS/PARTIAL/FAIL verdict.", Red);
+                MessageBox.Show(
+                    this,
+                    "The test did not finish with a verdict.\r\n\r\n" +
+                    "Exit code: " + exitCode + "\r\n" +
+                    "Check the activity log for details.",
+                    "Connection test",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return;
+            }
+
+            string word = verdictWord(verdict);
+            Color accentColor = verdictColor(word);
+            AppendLog("verdict: " + verdict, accentColor);
+
+            MessageBoxIcon icon = MessageBoxIcon.Information;
+            if (word == "PARTIAL")
+            {
+                icon = MessageBoxIcon.Warning;
+            }
+            else if (word == "FAIL")
+            {
+                icon = MessageBoxIcon.Error;
+            }
+
+            MessageBox.Show(
+                this,
+                verdict + "\r\n\r\nFull details are in the activity log.",
+                "Connection test",
+                MessageBoxButtons.OK,
+                icon);
         }
 
         private void SetStatus(string text, Color color)
@@ -902,13 +1513,13 @@ namespace VnptSteamBypass
             _actionButton.Text = text;
             _actionButton.BackColor = background;
             _actionButton.ForeColor = foreground;
-            _actionButton.HoverBackColor = Darken(background, 0.84);
-            _actionButton.PressedBackColor = Darken(background, 0.70);
-            _actionButton.BorderColor = Darken(background, 0.62);
+            _actionButton.HoverBackColor = darken(background, 0.84);
+            _actionButton.PressedBackColor = darken(background, 0.70);
+            _actionButton.BorderColor = darken(background, 0.62);
             _actionButton.Invalidate();
         }
 
-        private static Color Darken(Color color, double factor)
+        private static Color darken(Color color, double factor)
         {
             int red = (int)Math.Max(0, Math.Min(255, color.R * factor));
             int green = (int)Math.Max(0, Math.Min(255, color.G * factor));
@@ -936,6 +1547,14 @@ namespace VnptSteamBypass
             if (_clearLink != null)
             {
                 _clearLink.Enabled = !busy;
+            }
+            if (_VnptModeButton != null)
+            {
+                _VnptModeButton.Enabled = !busy;
+            }
+            if (_CampusModeButton != null)
+            {
+                _CampusModeButton.Enabled = !busy;
             }
 
             if (busy)
@@ -973,9 +1592,22 @@ namespace VnptSteamBypass
                 MessageBox.Show(
                     this,
                     "This action requires administrator rights. Close the app and start it again as administrator.",
-                    "VNPT Steam Bypass",
+                    "Steam Bypass",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_mode == BypassMode.Campus)
+            {
+                if (_Campus.On)
+                {
+                    await DisableCampusAsync(true);
+                }
+                else
+                {
+                    await EnableCampusAsync(true);
+                }
                 return;
             }
 
@@ -983,9 +1615,9 @@ namespace VnptSteamBypass
             {
                 DialogResult answer = MessageBox.Show(
                     this,
-                    "Turn the bypass OFF and restore the previous DNS and hosts state?\r\n\r\n" +
+                    "Turn the VNPT bypass OFF and restore the previous DNS and hosts state?\r\n\r\n" +
                     "Steam will go back to using the VNPT resolver.",
-                    "Turn off bypass",
+                    "Turn off VNPT bypass",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2);
@@ -995,24 +1627,18 @@ namespace VnptSteamBypass
                     return;
                 }
 
-                int exitCode = await RunScriptAsync(
-                    "Disable-SteamBypass.ps1",
-                    null,
-                    "Turning the bypass OFF",
-                    true);
-
-                if (exitCode == 0)
+                if (await DisableModeAsync(BypassMode.Vnpt))
                 {
                     ResetLastTest();
-                    AppendLog("Bypass is OFF. DNS and hosts are restored.", Green);
+                    AppendLog("VNPT bypass is OFF. DNS and hosts are restored.", Green);
 
                     if (_state != BypassState.Off)
                     {
                         MessageBox.Show(
                             this,
-                            "The disable script finished, but some bypass state remains.\r\n\r\n" +
+                            "The disable script finished, but some VNPT bypass state remains.\r\n\r\n" +
                             "Check the activity log or run the disable script again.",
-                            "VNPT Steam Bypass",
+                            "Steam Bypass",
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Warning);
                     }
@@ -1020,10 +1646,15 @@ namespace VnptSteamBypass
             }
             else
             {
+                if (!await PrepareModeEnableAsync(BypassMode.Vnpt))
+                {
+                    return;
+                }
+
                 int exitCode = await RunScriptAsync(
-                    "Enable-SteamBypass.ps1",
+                    "Enable-VnptBypass.ps1",
                     null,
-                    "Turning the bypass ON",
+                    "Turning the VNPT bypass ON",
                     true);
 
                 if (exitCode == 0)
@@ -1033,15 +1664,15 @@ namespace VnptSteamBypass
                     if (_state == BypassState.On)
                     {
                         bool verificationFailed = _runOutput != null &&
-                            _runOutput.ToString().IndexOf("FAILED:", StringComparison.OrdinalIgnoreCase) >= 0;
+                            _runOutput.ToString().IndexOf("FAIL:", StringComparison.OrdinalIgnoreCase) >= 0;
 
                         if (!verificationFailed)
                         {
                             MessageBox.Show(
                                 this,
-                                "Bypass enabled.\r\n\r\n" +
+                                "VNPT bypass enabled.\r\n\r\n" +
                                 "Fully quit Steam (including the tray icon), then start it again.",
-                                "VNPT Steam Bypass",
+                                "Steam Bypass",
                                 MessageBoxButtons.OK,
                                 MessageBoxIcon.Information);
                         }
@@ -1051,7 +1682,7 @@ namespace VnptSteamBypass
                                 this,
                                 "The bypass rules are active, but the enable script reported failed endpoint checks.\r\n\r\n" +
                                 "Click Test connection for details, or click Repair bypass when the network is healthy.",
-                                "VNPT Steam Bypass",
+                                "Steam Bypass",
                                 MessageBoxButtons.OK,
                                 MessageBoxIcon.Warning);
                         }
@@ -1060,9 +1691,9 @@ namespace VnptSteamBypass
                     {
                         MessageBox.Show(
                             this,
-                            "The enable script finished, but the bypass is not fully active.\r\n\r\n" +
+                            "The enable script finished, but the VNPT bypass is not fully active.\r\n\r\n" +
                             "Click Test connection to check it, or click Repair bypass to try again.",
-                            "VNPT Steam Bypass",
+                            "Steam Bypass",
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Warning);
                     }
@@ -1083,50 +1714,45 @@ namespace VnptSteamBypass
                 _lastTestLabel.ForeColor = Blue;
             }
 
-            int exitCode = await RunScriptAsync(
-                "Test-SteamBypass.ps1",
-                "-TimeoutSec 8",
-                "Testing the connection",
-                false);
+            string verdict = null;
+            int exitCode = -1;
 
-            string output = _runOutput == null ? string.Empty : _runOutput.ToString();
-            string verdict = FindVerdict(output);
-            UpdateLastTest(verdict);
-
-            if (string.IsNullOrEmpty(verdict))
+            if (_mode == BypassMode.Campus)
             {
-                AppendLog("The test did not return a PASS/PARTIAL/FAIL verdict.", Red);
-                MessageBox.Show(
-                    this,
-                    "The test did not finish with a verdict.\r\n\r\n" +
-                    "Exit code: " + exitCode + "\r\n" +
-                    "Check the activity log for details.",
-                    "Connection test",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
-                return;
+                SetBusy(true, "Testing Campus/HCMUS mode");
+                try
+                {
+                    CampusTestResult result = await Task.Run(delegate
+                    {
+                        return CampusMode.Test(EngineLog);
+                    });
+                    if (result != null)
+                    {
+                        verdict = result.verdict;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AddOutputLine("ERROR: " + ex.Message, true);
+                }
+                finally
+                {
+                    SetBusy(false, null);
+                }
+            }
+            else
+            {
+                exitCode = await RunScriptAsync(
+                    "Test-VnptBypass.ps1",
+                    "-TimeoutSec 8",
+                    "Testing the VNPT connection",
+                    false);
+
+                string output = _runOutput == null ? string.Empty : _runOutput.ToString();
+                verdict = FindVerdict(output);
             }
 
-            string word = VerdictWord(verdict);
-            Color verdictColor = VerdictColor(word);
-            AppendLog("Verdict: " + verdict, verdictColor);
-
-            MessageBoxIcon icon = MessageBoxIcon.Information;
-            if (word == "PARTIAL")
-            {
-                icon = MessageBoxIcon.Warning;
-            }
-            else if (word == "FAIL")
-            {
-                icon = MessageBoxIcon.Error;
-            }
-
-            MessageBox.Show(
-                this,
-                verdict + "\r\n\r\nFull details are in the activity log.",
-                "Connection test",
-                MessageBoxButtons.OK,
-                icon);
+            ShowTestResult(verdict, exitCode);
         }
 
         private async Task<int> RunScriptAsync(
@@ -1322,7 +1948,7 @@ namespace VnptSteamBypass
                     this,
                     actionLabel + " did not complete successfully (exit code " + exitCode + ").\r\n\r\n" +
                     "See the activity log above for details.",
-                    "VNPT Steam Bypass",
+                    "Steam Bypass",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
             }
@@ -1371,7 +1997,7 @@ namespace VnptSteamBypass
                 {
                     color = Amber;
                 }
-                else if (trimmed.IndexOf("FAILED", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                else if (trimmed.IndexOf("FAIL:", StringComparison.OrdinalIgnoreCase) >= 0 ||
                          trimmed.IndexOf("ERROR", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     color = Red;
@@ -1435,7 +2061,7 @@ namespace VnptSteamBypass
             return matches[matches.Count - 1].Value.Trim();
         }
 
-        private static string VerdictWord(string verdict)
+        private static string verdictWord(string verdict)
         {
             if (string.IsNullOrEmpty(verdict))
             {
@@ -1451,7 +2077,7 @@ namespace VnptSteamBypass
             return verdict.Substring(0, colon).Trim().ToUpperInvariant();
         }
 
-        private static Color VerdictColor(string word)
+        private static Color verdictColor(string word)
         {
             if (word == "PASS")
             {
@@ -1478,9 +2104,9 @@ namespace VnptSteamBypass
                 return;
             }
 
-            string word = VerdictWord(verdict);
+            string word = verdictWord(verdict);
             _lastTestLabel.Text = "Last test: " + word + " - " + DateTime.Now.ToString("HH:mm");
-            _lastTestLabel.ForeColor = VerdictColor(word);
+            _lastTestLabel.ForeColor = verdictColor(word);
         }
 
         private void ResetLastTest()
@@ -1507,7 +2133,7 @@ namespace VnptSteamBypass
                 MessageBox.Show(
                     this,
                     "Could not open the data folder.\r\n\r\n" + ex.Message,
-                    "VNPT Steam Bypass",
+                    "Steam Bypass",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
             }
@@ -1527,3 +2153,4 @@ namespace VnptSteamBypass
         }
     }
 }
+

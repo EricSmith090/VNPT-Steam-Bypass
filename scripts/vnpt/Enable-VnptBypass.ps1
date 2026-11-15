@@ -31,10 +31,10 @@
     Per-endpoint curl timeout in seconds. Default 8.
 
 .EXAMPLE
-    .\Enable-SteamBypass.ps1 -DryRun
+    .\Enable-VnptBypass.ps1 -DryRun
 
 .EXAMPLE
-    .\Enable-SteamBypass.ps1
+    .\Enable-VnptBypass.ps1
 #>
 [CmdletBinding()]
 param(
@@ -47,7 +47,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'SteamBypass.Common.ps1')
+. (Join-Path $PSScriptRoot 'VnptBypass.Common.ps1')
 
 Write-SteamBypassHeader 'VNPT Steam bypass - enable'
 Write-SteamNetworkContext
@@ -61,7 +61,7 @@ if (-not $DryRun -and -not (Test-IsAdmin)) {
     Write-Host ''
     Write-Host 'Open PowerShell as Administrator, then run:' -ForegroundColor Yellow
     Write-Host ("  Set-Location '{0}'" -f $PSScriptRoot)
-    Write-Host '  .\Enable-SteamBypass.ps1'
+    Write-Host '  .\Enable-VnptBypass.ps1'
     exit 1
 }
 
@@ -203,6 +203,6 @@ if ($DryRun) {
 }
 else {
     Write-Host 'Steam bypass enabled.' -ForegroundColor Green
-    Write-Host 'Restart Steam completely (including the tray icon) and run .\Test-SteamBypass.ps1.' -ForegroundColor Gray
-    Write-Host 'To undo: .\Disable-SteamBypass.ps1' -ForegroundColor Gray
+    Write-Host 'Restart Steam completely (including the tray icon) and run .\Test-VnptBypass.ps1.' -ForegroundColor Gray
+    Write-Host 'To undo: .\Disable-VnptBypass.ps1' -ForegroundColor Gray
 }
