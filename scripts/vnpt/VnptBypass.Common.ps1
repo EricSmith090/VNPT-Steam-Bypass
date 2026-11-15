@@ -1,5 +1,5 @@
 # Shared helpers for the VNPT Steam bypass scripts.
-# This file is dot-sourced by Enable/Disable/Test-SteamBypass.ps1.
+# This file is dot-sourced by Enable/Disable/Test-VnptBypass.ps1.
 
 $ErrorActionPreference = 'Stop'
 

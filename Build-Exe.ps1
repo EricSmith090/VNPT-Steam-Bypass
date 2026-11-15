@@ -4,9 +4,11 @@
     Build the standalone VNPT Steam Bypass GUI executable.
 
 .DESCRIPTION
-    Compiles src\SteamBypassGui.cs and src\UiControls.cs with the .NET Framework
-    C# compiler. The four PowerShell scripts are embedded into the EXE, so the
-    result is a single self-contained file.
+    Compiles src\SteamBypassGui.cs, src\UiControls.cs, src\CampusMode.cs and
+    src\SteamSnIRelay.cs with the .NET Framework C# compiler. The four VNPT
+    PowerShell scripts are embedded into the EXE, so the result is a single
+    self-contained file. The same EXE hosts the Campus/HCMUS relay behind the
+    hidden --relay switch, so one file provides both modes.
 
 .PARAMETER NoIcon
     Do not regenerate src\app.ico.
@@ -149,17 +151,20 @@ try {
 
     $sourceDir = Join-Path $root 'src'
     $distDir = Join-Path $root 'dist'
+    $scriptDir = Join-Path $root 'scripts\vnpt'
     $manifest = Join-Path $sourceDir 'app.manifest'
     $icon = Join-Path $sourceDir 'app.ico'
 
     foreach ($required in @(
         (Join-Path $sourceDir 'SteamBypassGui.cs'),
         (Join-Path $sourceDir 'UiControls.cs'),
+        (Join-Path $sourceDir 'CampusMode.cs'),
+        (Join-Path $sourceDir 'SteamSnIRelay.cs'),
         $manifest,
-        (Join-Path $root 'SteamBypass.Common.ps1'),
-        (Join-Path $root 'Enable-SteamBypass.ps1'),
-        (Join-Path $root 'Disable-SteamBypass.ps1'),
-        (Join-Path $root 'Test-SteamBypass.ps1')
+        (Join-Path $scriptDir 'VnptBypass.Common.ps1'),
+        (Join-Path $scriptDir 'Enable-VnptBypass.ps1'),
+        (Join-Path $scriptDir 'Disable-VnptBypass.ps1'),
+        (Join-Path $scriptDir 'Test-VnptBypass.ps1')
     )) {
         if (-not (Test-Path -LiteralPath $required)) {
             throw "Required file is missing: $required"
@@ -183,18 +188,23 @@ try {
         '/platform:anycpu',
         '/optimize+',
         '/debug-',
+        '/main:VnptSteamBypass.Program',
         ('/out:' + $output),
         ('/win32manifest:' + $manifest),
         '/reference:System.dll',
         '/reference:System.Core.dll',
         '/reference:System.Drawing.dll',
+        '/reference:System.Management.dll',
+        '/reference:System.Web.Extensions.dll',
         '/reference:System.Windows.Forms.dll',
         'src\SteamBypassGui.cs',
         'src\UiControls.cs',
-        ('/resource:SteamBypass.Common.ps1,Scripts.SteamBypass.Common.ps1'),
-        ('/resource:Enable-SteamBypass.ps1,Scripts.Enable-SteamBypass.ps1'),
-        ('/resource:Disable-SteamBypass.ps1,Scripts.Disable-SteamBypass.ps1'),
-        ('/resource:Test-SteamBypass.ps1,Scripts.Test-SteamBypass.ps1')
+        'src\CampusMode.cs',
+        'src\SteamSnIRelay.cs',
+        '/resource:scripts\vnpt\VnptBypass.Common.ps1,Scripts.VnptBypass.Common.ps1',
+        '/resource:scripts\vnpt\Enable-VnptBypass.ps1,Scripts.Enable-VnptBypass.ps1',
+        '/resource:scripts\vnpt\Disable-VnptBypass.ps1,Scripts.Disable-VnptBypass.ps1',
+        '/resource:scripts\vnpt\Test-VnptBypass.ps1,Scripts.Test-VnptBypass.ps1'
     )
 
     if (Test-Path -LiteralPath $icon) {

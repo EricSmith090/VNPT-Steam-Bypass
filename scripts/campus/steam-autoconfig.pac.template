@@ -1,0 +1,34 @@
+// Reference PAC template used by Enable-CampusRelay.ps1 (relay port is filled in at enable time).
+// The live copy is written to %LOCALAPPDATA%\HCMUS-Campus\steam.pac and served by the
+// relay at http://127.0.0.1:8788/steam.pac; Chromium/Steam ignores file:// PAC URLs.
+function FindProxyForURL(url, host) {
+  var h = (host || "").toLowerCase();
+  var suffixes = [
+    "steampowered.com",
+    "steamcommunity.com",
+    "steamstatic.com",
+    "steamgames.com",
+    "valvesoftware.com",
+    "steam-chat.com",
+    "steam.tv",
+    "steamdeck.com",
+    "steamcloud.com",
+    "steamcontent.com",
+    "steamusercontent.com",
+    "steamserver.net",
+    "steamconnect.com",
+    "steamcdn-a.akamaihd.net",
+    "steamuserimages-a.akamaihd.net",
+    "steamstore-a.akamaihd.net",
+    "steamcommunity-a.akamaihd.net",
+    "steamstatic-a.akamaihd.net",
+    "s.team"
+  ];
+  for (var i = 0; i < suffixes.length; i++) {
+    var s = suffixes[i];
+    if (h === s || dnsDomainIs(h, "." + s)) {
+      return "PROXY 127.0.0.1:8787";
+    }
+  }
+  return "DIRECT";
+}

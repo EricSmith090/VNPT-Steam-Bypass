@@ -4,7 +4,7 @@
     Undo the targeted VNPT Steam bypass.
 
 .DESCRIPTION
-    Removes the NRPT split-DNS rules created by Enable-SteamBypass.ps1, removes
+    Removes the NRPT split-DNS rules created by Enable-VnptBypass.ps1, removes
     the managed hosts block, and restores any Steam hosts entries that the
     enable script commented out. A timestamped hosts backup is written first.
 
@@ -21,7 +21,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'SteamBypass.Common.ps1')
+. (Join-Path $PSScriptRoot 'VnptBypass.Common.ps1')
 
 Write-SteamBypassHeader 'VNPT Steam bypass - disable'
 Write-SteamNetworkContext -SkipPublicIp
@@ -31,7 +31,7 @@ if (-not $DryRun -and -not (Test-IsAdmin)) {
     Write-Host ''
     Write-Host 'Open PowerShell as Administrator, then run:' -ForegroundColor Yellow
     Write-Host ("  Set-Location '{0}'" -f $PSScriptRoot)
-    Write-Host '  .\Disable-SteamBypass.ps1'
+    Write-Host '  .\Disable-VnptBypass.ps1'
     exit 1
 }
 

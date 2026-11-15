@@ -10,7 +10,7 @@
     not being routed through a tunnel.
 
 .EXAMPLE
-    .\Test-SteamBypass.ps1
+    .\Test-VnptBypass.ps1
 #>
 [CmdletBinding()]
 param(
@@ -18,7 +18,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'SteamBypass.Common.ps1')
+. (Join-Path $PSScriptRoot 'VnptBypass.Common.ps1')
 
 function Invoke-CurlCheck {
     param(
@@ -176,5 +176,5 @@ if ($controlOk -and $sniBlocked) {
     exit 1
 }
 
-Write-Host 'FAIL: Steam is still blocked. Click Repair bypass in the GUI (or re-run Enable-SteamBypass.ps1) and check the NRPT/hosts state.' -ForegroundColor Red
+Write-Host 'FAIL: Steam is still blocked. Click Repair bypass in the GUI (or re-run Enable-VnptBypass.ps1) and check the NRPT/hosts state.' -ForegroundColor Red
 exit 1
